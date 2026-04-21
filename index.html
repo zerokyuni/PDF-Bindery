@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Manipulation Studio</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  
+  <!-- PDF-lib -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+
+  <style>
+    /* 드래그 앤 드롭 인디케이터 커스텀 스타일 */
+    .drop-target-top {
+      box-shadow: 0 -6px 0 -2px #3b82f6 !important;
+      border-color: #3b82f6 !important;
+    }
+    .drop-target-bottom {
+      box-shadow: 0 6px 0 -2px #3b82f6 !important;
+      border-color: #3b82f6 !important;
+    }
+    /* 캔버스 그림자 스타일 */
+    .inner-shadow {
+      box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05);
+    }
+    /* 스크롤바 커스텀 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    /* 다중 선택 및 드래그 업로드 활성화 스타일 */
+    .selected-item {
+      border-color: #3b82f6 !important;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3) !important;
+      background-color: #eff6ff !important;
+    }
+    .upload-zone-active {
+      background-color: #eff6ff !important;
+      border-color: #3b82f6 !important;
+    }
+    /* 빈 워크스페이스 파일 드래그 활성화 스타일 */
+    .empty-workspace-active {
+      background-color: #eff6ff !important;
+      box-shadow: inset 0 0 0 2px #3b82f6 !important;
+    }
+  </style>
+</head>
+<body class="h-screen w-full bg-slate-100 text-gray-800 font-sans flex flex-col overflow-hidden selection:bg-blue-100">
+
+  <!-- 글로벌 로딩 오버레이 -->
+  <div id="loadingOverlay" class="hidden absolute inset-0 z-50 bg-white/60 backdrop-blur-sm flex flex-col items-center justify-center">
+    <div class="bg-white p-6 rounded-2xl shadow-2xl flex flex-col items-center border border-gray-100">
+      <i data-lucide="loader-2" class="w-12 h-12 animate-spin text-blue-600 mb-4"></i>
+      <h3 id="loadingMsg" class="text-lg font-bold text-gray-800">처리 중...</h3>
+    </div>
+  </div>
+
+  <!-- 헤더 -->
+  <header class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shadow-sm z-10 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="bg-blue-600 p-2 rounded-lg text-white shadow-md shadow-blue-200">
+        <i data-lucide="file" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h1 class="text-xl font-bold tracking-tight text-gray-900">PDF 제본소 by KYUN</h1>
+        <p class="text-xs text-gray-500 font-medium">드래그 앤 드롭으로 PDF 페이지를 자유롭게 재구성하세요.</p>
+      </div>
+    </div>
+  </header>
+
+  <!-- 메인 레이아웃 (3단 분할) -->
+  <main class="flex-1 flex gap-6 p-6 overflow-hidden min-h-0">
+    
+    <!-- Left Panel (Workspace A) -->
+    <div class="w-[20%] min-w-[200px] h-full flex flex-col bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden transition-transform">
+      <div class="p-3 border-b flex justify-between items-center bg-blue-50/50 gap-1">
+        <h2 class="font-bold text-gray-800 flex items-center gap-1.5 min-w-0">
+          <span class="bg-white px-1.5 py-0.5 rounded-md shadow-sm text-[11px] border whitespace-nowrap">작업대 L</span>
+          <span id="countA" class="text-xs font-medium text-gray-500 whitespace-nowrap truncate">0 pages</span>
+        </h2>
+        <button id="btnDownloadA" class="flex items-center justify-center gap-1 px-2 py-1.5 bg-gray-900 text-white text-xs font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm shrink-0" disabled>
+          <i data-lucide="download" class="w-3.5 h-3.5"></i> <span class="whitespace-nowrap">저장</span>
+        </button>
+      </div>
+      <div class="p-3 border-b bg-gray-50/50">
+        <label id="uploadZoneA" data-workspace="A" class="upload-zone flex flex-col items-center justify-center w-full h-16 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer bg-white hover:bg-blue-50 hover:border-blue-400 transition-all group p-1">
+          <div class="flex flex-col items-center gap-0.5 text-gray-500 group-hover:text-blue-600 pointer-events-none text-center">
+            <i data-lucide="file-up" class="w-4 h-4"></i>
+            <span class="text-[11px] font-medium leading-tight break-keep">PDF 파일 추가<br/>(또는 드래그)</span>
+          </div>
+          <input type="file" id="uploadA" class="hidden" accept="application/pdf" multiple />
+        </label>
+      </div>
+      <div id="listA" data-workspace="A" class="flex-1 overflow-y-auto p-4 space-y-3 relative bg-slate-50/30">
+        <!-- 썸네일 렌더링 영역 -->
+      </div>
+    </div>
+
+    <!-- Center Panel (Main Viewer) -->
+    <div class="flex-1 bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden flex flex-col relative">
+      <div class="p-4 border-b bg-white flex justify-between items-center z-10 shadow-sm">
+        <h2 class="font-bold text-gray-800 flex items-center gap-2">
+          <i data-lucide="maximize-2" class="w-4 h-4 text-blue-600"></i>
+          메인 뷰어
+        </h2>
+        <span id="viewerBadge" class="hidden text-sm font-medium text-gray-500 bg-gray-100 px-3 py-1 rounded-full">상세 보기</span>
+      </div>
+      
+      <div class="flex-1 overflow-auto bg-gray-100/50 flex justify-center items-center p-8 relative inner-shadow" id="viewerContainer">
+        <!-- 비어있을 때 메시지 -->
+        <div id="viewerEmpty" class="flex flex-col items-center text-gray-400 gap-4">
+          <i data-lucide="file" class="w-16 h-16 text-gray-300" stroke-width="1"></i>
+          <p class="text-lg font-medium text-gray-500">좌측/우측 패널에서 페이지를 선택하세요</p>
+        </div>
+        <!-- 캔버스 (선택 시 렌더링) -->
+        <div id="viewerContent" class="hidden relative shadow-[0_10px_40px_rgba(0,0,0,0.1)] transition-transform duration-300 bg-white">
+           <canvas id="mainCanvas" class="max-w-full h-auto drop-shadow-lg rounded-sm"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel (Workspace B) -->
+    <div class="w-[20%] min-w-[200px] h-full flex flex-col bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden transition-transform">
+      <div class="p-3 border-b flex justify-between items-center bg-emerald-50/50 gap-1">
+        <h2 class="font-bold text-gray-800 flex items-center gap-1.5 min-w-0">
+          <span class="bg-white px-1.5 py-0.5 rounded-md shadow-sm text-[11px] border whitespace-nowrap">작업대 R</span>
+          <span id="countB" class="text-xs font-medium text-gray-500 whitespace-nowrap truncate">0 pages</span>
+        </h2>
+        <button id="btnDownloadB" class="flex items-center justify-center gap-1 px-2 py-1.5 bg-gray-900 text-white text-xs font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm shrink-0" disabled>
+          <i data-lucide="download" class="w-3.5 h-3.5"></i> <span class="whitespace-nowrap">저장</span>
+        </button>
+      </div>
+      <div class="p-3 border-b bg-gray-50/50">
+        <label id="uploadZoneB" data-workspace="B" class="upload-zone flex flex-col items-center justify-center w-full h-16 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer bg-white hover:bg-blue-50 hover:border-blue-400 transition-all group p-1">
+          <div class="flex flex-col items-center gap-0.5 text-gray-500 group-hover:text-blue-600 pointer-events-none text-center">
+            <i data-lucide="file-up" class="w-4 h-4"></i>
+            <span class="text-[11px] font-medium leading-tight break-keep">PDF 파일 추가<br/>(또는 드래그)</span>
+          </div>
+          <input type="file" id="uploadB" class="hidden" accept="application/pdf" multiple />
+        </label>
+      </div>
+      <div id="listB" data-workspace="B" class="flex-1 overflow-y-auto p-4 space-y-3 relative bg-slate-50/30">
+        <!-- 썸네일 렌더링 영역 -->
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // --- 1. 상태 및 초기 설정 ---
+    const state = {
+      A: [],
+      B: [],
+      previewPage: null,
+      draggedItems: [], // 다중 드래그 앤 드롭 배열
+      dragSourceWorkspace: null,
+      selectedIds: new Set(), // 다중 선택 목록
+      lastClickedId: null     // 범위(Shift) 선택 기준점
+    };
+
+    let renderTask = null; // 메인 뷰어 렌더링 취소용
+
+    document.addEventListener("DOMContentLoaded", () => {
+      // PDF.js 워커 설정
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      
+      // 아이콘 초기화
+      lucide.createIcons();
+
+      // 이벤트 바인딩
+      document.getElementById('uploadA').addEventListener('change', (e) => handleFileUpload(e, 'A'));
+      document.getElementById('uploadB').addEventListener('change', (e) => handleFileUpload(e, 'B'));
+      document.getElementById('btnDownloadA').addEventListener('click', () => handleDownload('A'));
+      document.getElementById('btnDownloadB').addEventListener('click', () => handleDownload('B'));
+
+      // 파일 드래그 앤 드롭 존 설정
+      setupFileUploadZone('uploadZoneA', 'A');
+      setupFileUploadZone('uploadZoneB', 'B');
+
+      // 워크스페이스 빈 영역 드롭 처리
+      setupWorkspaceDropZone('listA', 'A');
+      setupWorkspaceDropZone('listB', 'B');
+
+      // 초기 렌더링
+      renderWorkspace('A');
+      renderWorkspace('B');
+    });
+
+    // --- 2. 로딩 UI 컨트롤 ---
+    function showLoading(msg) {
+      document.getElementById('loadingMsg').innerText = msg;
+      document.getElementById('loadingOverlay').classList.remove('hidden');
+    }
+
+    function hideLoading() {
+      document.getElementById('loadingOverlay').classList.add('hidden');
+    }
+
+    // --- 파일 시스템 드래그 앤 드롭 업로드 연결 ---
+    function setupFileUploadZone(zoneId, workspaceId) {
+      const zone = document.getElementById(zoneId);
+      zone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        zone.classList.add('upload-zone-active');
+      });
+      zone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        zone.classList.remove('upload-zone-active');
+      });
+      zone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        zone.classList.remove('upload-zone-active');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          handleFileUpload({ target: { files: e.dataTransfer.files } }, workspaceId);
+        }
+      });
+    }
+
+    // --- 3. 유틸: UUID 생성 ---
+    function generateUUID() {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+
+    // --- 4. 핵심 기능: PDF 로드 및 썸네일 추출 ---
+    async function handleFileUpload(event, workspaceId) {
+      const files = Array.from(event.target.files);
+      if (files.length === 0) return;
+
+      const pdfFiles = files.filter(f => f.type === 'application/pdf');
+      if (pdfFiles.length === 0) {
+        alert('PDF 파일만 업로드 가능합니다.');
+        return;
+      }
+
+      showLoading("PDF를 분석하고 썸네일을 생성하는 중...");
+      try {
+        for (const file of pdfFiles) {
+          const arrayBuffer = await file.arrayBuffer();
+          const pdfData = new Uint8Array(arrayBuffer); 
+          
+          // 버그 수정: Worker로 전송할 때 원본 버퍼가 Detach 되지 않도록 복사본 전달
+          const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(pdfData) }).promise;
+          const numPages = pdf.numPages;
+          const sourceId = generateUUID();
+          const newPages = [];
+
+          for (let i = 1; i <= numPages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 0.3 }); // 썸네일 해상도
+            
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+
+            await page.render({ canvasContext: ctx, viewport }).promise;
+            const thumbnail = canvas.toDataURL('image/jpeg', 0.8);
+
+            newPages.push({
+              id: generateUUID(),
+              sourceId: sourceId,
+              pdfBytes: pdfData, 
+              originalPageIndex: i - 1, 
+              thumbnail: thumbnail,
+              pageNumber: i,
+              rotation: 0 // 회전 상태 추가
+            });
+          }
+
+          state[workspaceId] = [...state[workspaceId], ...newPages];
+        }
+        renderWorkspace(workspaceId);
+        
+      } catch (error) {
+        console.error("PDF 처리 오류:", error);
+        alert("PDF를 읽는 중 오류가 발생했습니다.");
+      } finally {
+        hideLoading();
+        event.target.value = ''; // 입력 필드 초기화
+      }
+    }
+
+    // --- 5. 렌더링 로직 (워크스페이스 썸네일) ---
+    function renderWorkspace(workspaceId) {
+      const container = document.getElementById(`list${workspaceId}`);
+      const items = state[workspaceId];
+      
+      // 개수 및 다운로드 버튼 업데이트
+      document.getElementById(`count${workspaceId}`).innerText = `${items.length} pages`;
+      document.getElementById(`btnDownload${workspaceId}`).disabled = items.length === 0;
+
+      container.innerHTML = '';
+
+      if (items.length === 0) {
+        container.innerHTML = `
+          <div class="h-full flex flex-col items-center justify-center text-gray-400 gap-2 opacity-60 pointer-events-none px-2">
+            <i data-lucide="upload-cloud" class="w-10 h-10" stroke-width="1.5"></i>
+            <p class="text-[11px] text-center break-keep leading-relaxed">PDF파일을 업로드해서<br/>페이지 변경작업을<br/>시작하세요.</p>
+          </div>
+        `;
+        lucide.createIcons();
+        return;
+      }
+
+      items.forEach((item, index) => {
+        const isSelected = state.selectedIds.has(item.id);
+        const isPreviewed = state.previewPage?.id === item.id;
+        
+        let borderClass = 'border-gray-200 hover:border-gray-300';
+        if (isSelected) borderClass = 'selected-item';
+        else if (isPreviewed) borderClass = 'border-blue-500 ring-2 ring-blue-200';
+
+        const div = document.createElement('div');
+        div.className = `relative group bg-white p-2 rounded-xl border-2 transition-all cursor-pointer shadow-sm hover:shadow-md pdf-item select-none ${borderClass}`;
+        div.draggable = true;
+        div.dataset.id = item.id;
+        div.dataset.workspace = workspaceId;
+        div.dataset.index = index;
+
+        div.innerHTML = `
+          <div class="flex items-start gap-3 pointer-events-none">
+            <div class="mt-2 text-gray-300 cursor-grab active:cursor-grabbing">
+              <i data-lucide="grip-vertical" class="w-5 h-5"></i>
+            </div>
+            <div class="flex-1 overflow-hidden rounded-lg bg-gray-100 flex items-center justify-center min-h-[120px]">
+              <img src="${item.thumbnail}" alt="Page ${index + 1}" class="max-w-full h-auto object-contain drop-shadow-sm transition-transform duration-200" style="transform: rotate(${item.rotation}deg);" draggable="false" />
+            </div>
+          </div>
+          <!-- 다중 선택 뱃지 -->
+          ${isSelected ? `<div class="absolute -top-2 -left-2 bg-blue-500 text-white rounded-full p-1 shadow-md"><i data-lucide="check" class="w-3 h-3"></i></div>` : ''}
+          <!-- 호버 액션 버튼 -->
+          <div class="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-1.5 backdrop-blur-md bg-white/80 p-1.5 rounded-lg shadow-sm border border-gray-100 z-10">
+            <button class="btn-rotate p-1.5 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="페이지 회전">
+              <i data-lucide="rotate-cw" class="w-4 h-4 pointer-events-none"></i>
+            </button>
+            <button class="btn-copy p-1.5 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="페이지 복제">
+              <i data-lucide="copy" class="w-4 h-4 pointer-events-none"></i>
+            </button>
+            <button class="btn-delete p-1.5 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" title="페이지 삭제">
+              <i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i>
+            </button>
+          </div>
+          <!-- 페이지 번호 -->
+          <div class="absolute bottom-3 right-3 bg-gray-900/70 backdrop-blur-sm text-white text-xs px-2 py-1 rounded-md font-medium pointer-events-none">
+            ${index + 1}
+          </div>
+        `;
+
+        // 이벤트 리스너: 클릭 (다중 선택 로직 포함)
+        div.addEventListener('click', (e) => {
+          if (e.target.closest('button')) return;
+
+          if (e.ctrlKey || e.metaKey) {
+            if (state.selectedIds.has(item.id)) state.selectedIds.delete(item.id);
+            else state.selectedIds.add(item.id);
+          } else if (e.shiftKey && state.lastClickedId) {
+            const wsItems = state[workspaceId];
+            const startIdx = wsItems.findIndex(i => i.id === state.lastClickedId);
+            const endIdx = index;
+            if (startIdx !== -1) {
+              const min = Math.min(startIdx, endIdx);
+              const max = Math.max(startIdx, endIdx);
+              state.selectedIds.clear();
+              for (let i = min; i <= max; i++) state.selectedIds.add(wsItems[i].id);
+            }
+          } else {
+            state.selectedIds.clear();
+            state.selectedIds.add(item.id);
+          }
+          
+          state.lastClickedId = item.id;
+          setPreviewPage(item);
+        });
+
+        div.querySelector('.btn-rotate').addEventListener('click', (e) => {
+          e.stopPropagation();
+          rotatePage(workspaceId, item.id);
+        });
+        div.querySelector('.btn-copy').addEventListener('click', (e) => {
+          e.stopPropagation();
+          duplicatePage(workspaceId, item.id);
+        });
+        div.querySelector('.btn-delete').addEventListener('click', (e) => {
+          e.stopPropagation();
+          deletePage(workspaceId, item.id);
+        });
+
+        // 드래그 앤 드롭 이벤트 등록
+        div.addEventListener('dragstart', handleDragStart);
+        div.addEventListener('dragend', handleDragEnd);
+        div.addEventListener('dragover', handleDragOver);
+        div.addEventListener('dragleave', handleDragLeave);
+        div.addEventListener('drop', handleDrop);
+
+        container.appendChild(div);
+      });
+
+      lucide.createIcons({ root: container });
+    }
+
+    // --- 6. 렌더링 로직 (메인 뷰어 고해상도) ---
+    async function setPreviewPage(item) {
+      state.previewPage = item;
+      // 선택 상태 하이라이트를 위해 워크스페이스 리렌더링
+      renderWorkspace('A');
+      renderWorkspace('B');
+
+      const viewerEmpty = document.getElementById('viewerEmpty');
+      const viewerContent = document.getElementById('viewerContent');
+      const canvas = document.getElementById('mainCanvas');
+      const badge = document.getElementById('viewerBadge');
+
+      if (!item) {
+        viewerEmpty.classList.remove('hidden');
+        viewerContent.classList.add('hidden');
+        badge.classList.add('hidden');
+        return;
+      }
+
+      viewerEmpty.classList.add('hidden');
+      viewerContent.classList.remove('hidden');
+      badge.classList.remove('hidden');
+
+      if (renderTask) {
+        renderTask.cancel();
+      }
+
+      try {
+        // 버그 수정: Detach 방지를 위해 복사본 넘기기
+        const pdfDataCopy = new Uint8Array(item.pdfBytes);
+        const pdf = await pdfjsLib.getDocument({ data: pdfDataCopy }).promise;
+        const page = await pdf.getPage(item.originalPageIndex + 1);
+        
+        const baseViewport = page.getViewport({ scale: 2.0 }); 
+        // 선택된 페이지의 회전값 반영
+        const viewport = page.getViewport({ scale: 2.0, rotation: baseViewport.rotation + item.rotation }); 
+        
+        const ctx = canvas.getContext('2d');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+
+        renderTask = page.render({ canvasContext: ctx, viewport });
+        await renderTask.promise;
+      } catch (err) {
+        if (err.name !== 'RenderingCancelledException') {
+          console.error('고해상도 렌더링 오류:', err);
+        }
+      }
+    }
+
+    // --- 7. 조작 로직 (다중 선택 일괄 적용 지원) ---
+    function getTargetIds(id) {
+      if (state.selectedIds.has(id)) return Array.from(state.selectedIds);
+      return [id];
+    }
+
+    function rotatePage(workspaceId, id) {
+      const targetIds = getTargetIds(id);
+      ['A', 'B'].forEach(ws => {
+        state[ws].forEach(item => {
+          if (targetIds.includes(item.id)) {
+            item.rotation = (item.rotation + 90) % 360;
+          }
+        });
+      });
+      renderWorkspace('A'); renderWorkspace('B');
+      if (state.previewPage && targetIds.includes(state.previewPage.id)) setPreviewPage(state.previewPage);
+    }
+
+    function duplicatePage(workspaceId, id) {
+      const targetIds = getTargetIds(id);
+      const itemsToDuplicate = state[workspaceId].filter(i => targetIds.includes(i.id));
+      const newItems = itemsToDuplicate.map(item => ({ ...item, id: generateUUID() }));
+      const insertIndex = state[workspaceId].findIndex(i => i.id === id) + 1;
+      state[workspaceId].splice(insertIndex, 0, ...newItems);
+      renderWorkspace(workspaceId);
+    }
+
+    function deletePage(workspaceId, id) {
+      const targetIds = getTargetIds(id);
+      state.A = state.A.filter(item => !targetIds.includes(item.id));
+      state.B = state.B.filter(item => !targetIds.includes(item.id));
+      
+      targetIds.forEach(deletedId => {
+        state.selectedIds.delete(deletedId);
+        if (state.previewPage?.id === deletedId) setPreviewPage(null);
+      });
+      renderWorkspace('A'); renderWorkspace('B');
+    }
+
+    // --- 8. 네이티브 드래그 앤 드롭 구현 ---
+    function handleDragStart(e) {
+      const el = e.currentTarget;
+      const itemId = el.dataset.id;
+      const wsId = el.dataset.workspace;
+
+      // 드래그 시작 시 선택되지 않은 항목이면 해당 항목만 단일 선택으로 설정
+      if (!state.selectedIds.has(itemId)) {
+        state.selectedIds.clear();
+        state.selectedIds.add(itemId);
+        renderWorkspace('A'); renderWorkspace('B');
+      }
+
+      state.dragSourceWorkspace = wsId;
+      state.draggedItems = state[wsId].filter(i => state.selectedIds.has(i.id));
+
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', itemId); 
+      
+      // 드래그 중인 모든 선택 항목 투명도 적용
+      document.querySelectorAll('.selected-item').forEach(node => node.classList.add('opacity-50'));
+    }
+
+    function handleDragEnd(e) {
+      document.querySelectorAll('.pdf-item').forEach(el => {
+        el.classList.remove('opacity-50', 'drop-target-top', 'drop-target-bottom');
+      });
+      state.draggedItems = [];
+      state.dragSourceWorkspace = null;
+    }
+
+    function handleDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      
+      const el = e.currentTarget;
+      const rect = el.getBoundingClientRect();
+      const isBottomHalf = e.clientY > rect.top + rect.height / 2;
+
+      // 이전 인디케이터 클래스 제거
+      document.querySelectorAll('.pdf-item').forEach(item => {
+        item.classList.remove('drop-target-top', 'drop-target-bottom');
+      });
+
+      // 위치에 따라 상단/하단 표시선 추가
+      if (isBottomHalf) {
+        el.classList.add('drop-target-bottom');
+      } else {
+        el.classList.add('drop-target-top');
+      }
+    }
+
+    function handleDragLeave(e) {
+      e.currentTarget.classList.remove('drop-target-top', 'drop-target-bottom');
+    }
+
+    function handleDrop(e) {
+      e.preventDefault();
+      e.stopPropagation(); // 컨테이너 드롭 이벤트 방지
+      
+      const el = e.currentTarget;
+      el.classList.remove('drop-target-top', 'drop-target-bottom');
+
+      if (state.draggedItems.length === 0) return;
+
+      const targetWorkspace = el.dataset.workspace;
+      const targetIndexRaw = parseInt(el.dataset.index);
+      
+      const rect = el.getBoundingClientRect();
+      const isBottomHalf = e.clientY > rect.top + rect.height / 2;
+      const targetIndex = isBottomHalf ? targetIndexRaw + 1 : targetIndexRaw;
+
+      executeMove(targetWorkspace, targetIndex);
+    }
+
+    // 워크스페이스 컨테이너 자체에 드롭 (비어있을 때 등)
+    function setupWorkspaceDropZone(containerId, workspaceId) {
+      const container = document.getElementById(containerId);
+      
+      container.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        
+        // 파일 드래그인지, 아이템 드래그인지 구분
+        if (e.dataTransfer.types && e.dataTransfer.types.includes('Files')) {
+          e.dataTransfer.dropEffect = 'copy';
+          if (state[workspaceId].length === 0) {
+            container.classList.add('empty-workspace-active');
+          }
+        } else {
+          e.dataTransfer.dropEffect = 'move';
+        }
+      });
+
+      container.addEventListener('dragleave', (e) => {
+        container.classList.remove('empty-workspace-active');
+      });
+
+      container.addEventListener('drop', (e) => {
+        e.preventDefault();
+        container.classList.remove('empty-workspace-active');
+
+        // 파일 드롭 처리
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          handleFileUpload({ target: { files: e.dataTransfer.files } }, workspaceId);
+          return;
+        }
+
+        // 아이템 이동 드롭 처리
+        if (state.draggedItems.length === 0) return;
+        // 타겟 요소가 컨테이너 자체이거나 빈 영역일 경우 맨 끝으로 이동
+        if (e.target === container || container.children.length === 0 || e.target.closest('.h-full')) {
+          executeMove(workspaceId, state[workspaceId].length);
+        }
+      });
+    }
+
+    // 실제 배열 이동 로직 (다중 항목 동시 이동)
+    function executeMove(targetWorkspace, targetIndex) {
+      const itemsToMove = state.draggedItems;
+      const sourceWorkspace = state.dragSourceWorkspace;
+      
+      let finalInsertIndex = targetIndex;
+
+      // 같은 워크스페이스로 이동할 때 인덱스 꼬임 방지 보정
+      if (sourceWorkspace === targetWorkspace) {
+        const removedBeforeTarget = itemsToMove.filter(item => {
+          return state[sourceWorkspace].findIndex(i => i.id === item.id) < targetIndex;
+        }).length;
+        finalInsertIndex -= removedBeforeTarget;
+      }
+
+      state[sourceWorkspace] = state[sourceWorkspace].filter(item => !itemsToMove.some(m => m.id === item.id));
+      state[targetWorkspace].splice(finalInsertIndex, 0, ...itemsToMove);
+
+      state.draggedItems = [];
+      state.dragSourceWorkspace = null;
+      renderWorkspace('A');
+      renderWorkspace('B');
+    }
+
+    // --- 9. PDF 병합 및 다운로드 ---
+    async function handleDownload(workspaceId) {
+      const items = state[workspaceId];
+      if (items.length === 0) return;
+
+      showLoading(`Workspace ${workspaceId}의 PDF를 병합하고 있습니다...`);
+
+      try {
+        const { PDFDocument } = window.PDFLib;
+        const mergedPdf = await PDFDocument.create();
+        const sourceDocs = {}; // 메모리 최적화 캐시
+
+        for (const item of items) {
+          if (!sourceDocs[item.sourceId]) {
+            // 다운로드 시에도 원본 버퍼 유지를 위해 복사
+            sourceDocs[item.sourceId] = await PDFDocument.load(new Uint8Array(item.pdfBytes));
+          }
+          const srcDoc = sourceDocs[item.sourceId];
+          const [copiedPage] = await mergedPdf.copyPages(srcDoc, [item.originalPageIndex]);
+          
+          // 사용자가 적용한 회전값 병합 시 반영
+          if (item.rotation !== 0) {
+            const currentRotation = copiedPage.getRotation().angle;
+            copiedPage.setRotation(window.PDFLib.degrees(currentRotation + item.rotation));
+          }
+
+          mergedPdf.addPage(copiedPage);
+        }
+
+        const pdfBytes = await mergedPdf.save();
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Workspace_${workspaceId}_Merged.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+      } catch (error) {
+        console.error("PDF 생성 오류:", error);
+        alert("PDF 병합 및 다운로드 중 오류가 발생했습니다.");
+      } finally {
+        hideLoading();
+      }
+    }
+  </script>
+</body>
+</html>
