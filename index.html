@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PDF 제본소 by KYUN</title>
+  <title>PDF Manipulation Studio</title>
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -73,6 +73,9 @@
     </div>
   </div>
 
+  <!-- 토스트 알림 (커스텀 알림창) -->
+  <div id="toast" class="fixed bottom-10 left-1/2 transform -translate-x-1/2 translate-y-4 bg-gray-900 text-white px-6 py-4 rounded-xl shadow-2xl transition-all duration-300 opacity-0 pointer-events-none z-50 text-center text-sm font-medium leading-relaxed"></div>
+
   <!-- 헤더 -->
   <header class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shadow-sm z-10 shrink-0">
     <div class="flex items-center gap-3">
@@ -116,23 +119,34 @@
 
     <!-- Center Panel (Main Viewer) -->
     <div class="flex-1 bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden flex flex-col relative">
-      <div class="p-4 border-b bg-white flex justify-between items-center z-10 shadow-sm">
-        <h2 class="font-bold text-gray-800 flex items-center gap-2">
+      <div class="p-4 border-b bg-white flex justify-between items-center z-10 shadow-sm gap-2">
+        <h2 class="font-bold text-gray-800 flex items-center gap-2 whitespace-nowrap">
           <i data-lucide="maximize-2" class="w-4 h-4 text-blue-600"></i>
-          메인 뷰어
+          <span class="hidden sm:inline">메인 뷰어</span>
         </h2>
-        <span id="viewerBadge" class="hidden text-sm font-medium text-gray-500 bg-gray-100 px-3 py-1 rounded-full">상세 보기</span>
+
+        <!-- 줌 컨트롤 -->
+        <div id="zoomControls" class="hidden flex-1 max-w-[250px] items-center justify-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
+          <button id="btnZoomOut" class="p-1 text-gray-500 hover:text-blue-600 hover:bg-white rounded transition-all"><i data-lucide="zoom-out" class="w-4 h-4"></i></button>
+          <input type="range" id="zoomSlider" min="0.5" max="3" step="0.1" value="1" class="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+          <button id="btnZoomIn" class="p-1 text-gray-500 hover:text-blue-600 hover:bg-white rounded transition-all"><i data-lucide="zoom-in" class="w-4 h-4"></i></button>
+          <span id="zoomLabel" class="text-xs font-bold text-gray-600 w-12 text-right">100%</span>
+        </div>
+
+        <span id="viewerBadge" class="hidden text-sm font-medium text-gray-500 bg-gray-100 px-3 py-1 rounded-full whitespace-nowrap">상세 보기</span>
       </div>
       
-      <div class="flex-1 overflow-auto bg-gray-100/50 flex justify-center items-center p-8 relative inner-shadow" id="viewerContainer">
-        <!-- 비어있을 때 메시지 -->
-        <div id="viewerEmpty" class="flex flex-col items-center text-gray-400 gap-4">
-          <i data-lucide="file" class="w-16 h-16 text-gray-300" stroke-width="1"></i>
-          <p class="text-lg font-medium text-gray-500">좌측/우측 패널에서 페이지를 선택하세요</p>
-        </div>
-        <!-- 캔버스 (선택 시 렌더링) -->
-        <div id="viewerContent" class="hidden relative shadow-[0_10px_40px_rgba(0,0,0,0.1)] transition-transform duration-300 bg-white">
-           <canvas id="mainCanvas" class="max-w-full h-auto drop-shadow-lg rounded-sm"></canvas>
+      <div class="flex-1 overflow-auto bg-gray-100/50" id="viewerContainer">
+        <div id="viewerFlexWrapper" class="min-h-full w-full flex justify-center items-center p-8 transition-all">
+          <!-- 비어있을 때 메시지 -->
+          <div id="viewerEmpty" class="flex flex-col items-center text-gray-400 gap-4">
+            <i data-lucide="file" class="w-16 h-16 text-gray-300" stroke-width="1"></i>
+            <p class="text-lg font-medium text-gray-500">좌측/우측 패널에서 페이지를 선택하세요</p>
+          </div>
+          <!-- 캔버스 (선택 시 렌더링) -->
+          <div id="viewerContent" class="hidden relative shadow-[0_10px_40px_rgba(0,0,0,0.1)] bg-white transition-opacity duration-300">
+             <canvas id="mainCanvas" class="block drop-shadow-lg rounded-sm"></canvas>
+          </div>
         </div>
       </div>
     </div>
@@ -173,7 +187,8 @@
       draggedItems: [], // 다중 드래그 앤 드롭 배열
       dragSourceWorkspace: null,
       selectedIds: new Set(), // 다중 선택 목록
-      lastClickedId: null     // 범위(Shift) 선택 기준점
+      lastClickedId: null,    // 범위(Shift) 선택 기준점
+      zoomLevel: 1.0          // 메인 뷰어 줌 레벨
     };
 
     let renderTask = null; // 메인 뷰어 렌더링 취소용
@@ -202,6 +217,11 @@
       // 초기 렌더링
       renderWorkspace('A');
       renderWorkspace('B');
+
+      // 줌 컨트롤 이벤트 바인딩
+      document.getElementById('zoomSlider').addEventListener('input', handleZoomInput);
+      document.getElementById('btnZoomIn').addEventListener('click', () => adjustZoom(0.1));
+      document.getElementById('btnZoomOut').addEventListener('click', () => adjustZoom(-0.1));
     });
 
     // --- 2. 로딩 UI 컨트롤 ---
@@ -212,6 +232,91 @@
 
     function hideLoading() {
       document.getElementById('loadingOverlay').classList.add('hidden');
+    }
+
+    // --- 토스트 알림 표시 ---
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.innerHTML = message;
+      toast.classList.remove('opacity-0', 'translate-y-4');
+      toast.classList.add('opacity-100', 'translate-y-0');
+      setTimeout(() => {
+        toast.classList.remove('opacity-100', 'translate-y-0');
+        toast.classList.add('opacity-0', 'translate-y-4');
+      }, 4000);
+    }
+
+    // --- 클립보드 복사 및 파일 다이얼로그 열기 (UX 개선) ---
+    function processLocalUrlAndOpenDialog(rawUrl, workspaceId) {
+      try {
+        // "file:///C:/Users/..." -> "C:\Users\..." 윈도우 포맷 변환
+        let path = rawUrl.replace(/^file:\/\/\/?/i, '');
+        path = decodeURIComponent(path);
+        path = path.replace(/\//g, '\\'); 
+
+        // 파일명을 제외하고 폴더 경로까지만 자르기
+        const lastSlashIndex = path.lastIndexOf('\\');
+        if (lastSlashIndex !== -1) {
+          path = path.substring(0, lastSlashIndex);
+        }
+
+        // 클립보드 자동 복사 (임시 textarea 사용)
+        const tempInput = document.createElement('textarea');
+        tempInput.value = path;
+        document.body.appendChild(tempInput);
+        tempInput.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempInput);
+
+        // 안내 알림 띄우기
+        showToast('파일이 있는 <b>폴더 경로</b>가 복사되었습니다! 🎉<br/>파일 창이 뜨면 상단 주소창이나 파일 이름 칸에 <b>[Ctrl + V]</b>를 누르고 <b>[Enter]</b>를 쳐서 해당 폴더로 이동하세요.');
+
+        // 브라우저 정책상 약간의 딜레이 후 파일 입력창(다이얼로그) 강제 클릭
+        setTimeout(() => {
+          document.getElementById(`upload${workspaceId}`).click();
+        }, 150);
+
+      } catch(err) {
+        console.error('경로 변환 및 복사 오류:', err);
+      }
+    }
+
+    // --- 드래그 앤 드롭 고급 처리 (.url 파일 및 텍스트 주소 파싱) ---
+    function handleAdvancedDrop(e, workspaceId) {
+      const files = e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+      
+      // 1. 실제 PDF 파일인 경우 (기존 정상 업로드)
+      const pdfFiles = files.filter(f => f.type === 'application/pdf');
+      if (pdfFiles.length > 0) {
+        handleFileUpload({ target: { files: pdfFiles } }, workspaceId);
+        return true;
+      }
+
+      // 2. .url 파일 (인터넷 바로가기)인 경우
+      const urlFile = files.find(f => f.name.toLowerCase().endsWith('.url'));
+      if (urlFile) {
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          const content = evt.target.result;
+          const match = content.match(/URL=(file:\/\/[^\r\n]+)/i);
+          if (match) {
+            processLocalUrlAndOpenDialog(match[1].trim(), workspaceId);
+          } else {
+            showToast("유효한 로컬 파일 경로를 찾을 수 없습니다.");
+          }
+        };
+        reader.readAsText(urlFile);
+        return true;
+      }
+
+      // 3. 브라우저 주소창에서 자물쇠 아이콘이나 URL 텍스트를 바로 드래그한 경우
+      const textData = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text/uri-list');
+      if (textData && textData.startsWith('file://')) {
+        processLocalUrlAndOpenDialog(textData.trim(), workspaceId);
+        return true;
+      }
+
+      return false; // 해당사항 없음
     }
 
     // --- 파일 시스템 드래그 앤 드롭 업로드 연결 ---
@@ -228,9 +333,7 @@
       zone.addEventListener('drop', (e) => {
         e.preventDefault();
         zone.classList.remove('upload-zone-active');
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          handleFileUpload({ target: { files: e.dataTransfer.files } }, workspaceId);
-        }
+        handleAdvancedDrop(e, workspaceId);
       });
     }
 
@@ -430,17 +533,22 @@
       const viewerContent = document.getElementById('viewerContent');
       const canvas = document.getElementById('mainCanvas');
       const badge = document.getElementById('viewerBadge');
+      const zoomControls = document.getElementById('zoomControls');
 
       if (!item) {
         viewerEmpty.classList.remove('hidden');
         viewerContent.classList.add('hidden');
         badge.classList.add('hidden');
+        zoomControls.classList.add('hidden');
+        zoomControls.classList.remove('flex');
         return;
       }
 
       viewerEmpty.classList.add('hidden');
       viewerContent.classList.remove('hidden');
       badge.classList.remove('hidden');
+      zoomControls.classList.remove('hidden');
+      zoomControls.classList.add('flex');
 
       if (renderTask) {
         renderTask.cancel();
@@ -452,13 +560,35 @@
         const pdf = await pdfjsLib.getDocument({ data: pdfDataCopy }).promise;
         const page = await pdf.getPage(item.originalPageIndex + 1);
         
-        const baseViewport = page.getViewport({ scale: 2.0 }); 
-        // 선택된 페이지의 회전값 반영
-        const viewport = page.getViewport({ scale: 2.0, rotation: baseViewport.rotation + item.rotation }); 
+        // 줌 레벨을 반영한 뷰포트 설정
+        const baseScale = 1.2; // 100% 일 때의 기본 배율
+        const baseViewport = page.getViewport({ scale: 1.0 }); 
+        const viewport = page.getViewport({ 
+          scale: baseScale * state.zoomLevel, 
+          rotation: baseViewport.rotation + item.rotation 
+        }); 
         
+        // 고해상도(Retina) 렌더링 지원
+        const outputScale = window.devicePixelRatio || 1;
         const ctx = canvas.getContext('2d');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
+        
+        canvas.width = viewport.width * outputScale;
+        canvas.height = viewport.height * outputScale;
+        canvas.style.width = Math.floor(viewport.width) + "px";
+        canvas.style.height = Math.floor(viewport.height) + "px";
+        
+        ctx.scale(outputScale, outputScale);
+
+        // 컨테이너 높이보다 캔버스가 커질 경우 위쪽이 잘리는 버그 방지 (Flex 정렬 동적 변경)
+        const container = document.getElementById('viewerContainer');
+        const flexWrapper = document.getElementById('viewerFlexWrapper');
+        if (viewport.height + 64 > container.clientHeight) { // 64는 위아래 padding
+           flexWrapper.classList.remove('items-center');
+           flexWrapper.classList.add('items-start');
+        } else {
+           flexWrapper.classList.remove('items-start');
+           flexWrapper.classList.add('items-center');
+        }
 
         renderTask = page.render({ canvasContext: ctx, viewport });
         await renderTask.promise;
@@ -466,6 +596,31 @@
         if (err.name !== 'RenderingCancelledException') {
           console.error('고해상도 렌더링 오류:', err);
         }
+      }
+    }
+
+    // --- 줌 컨트롤 로직 ---
+    function adjustZoom(delta) {
+      let newZoom = state.zoomLevel + delta;
+      if (newZoom < 0.5) newZoom = 0.5;
+      if (newZoom > 3) newZoom = 3;
+      document.getElementById('zoomSlider').value = newZoom;
+      triggerZoomUpdate(newZoom);
+    }
+
+    function handleZoomInput(e) {
+      triggerZoomUpdate(parseFloat(e.target.value));
+    }
+
+    function triggerZoomUpdate(newZoom) {
+      state.zoomLevel = newZoom;
+      document.getElementById('zoomLabel').innerText = `${Math.round(newZoom * 100)}%`;
+      
+      // 슬라이더 조작 시 렌더링 지연(Debounce)을 주어 버벅임 방지
+      if (renderTask) renderTask.cancel();
+      if (state.previewPage) {
+        if (window.zoomTimeout) clearTimeout(window.zoomTimeout);
+        window.zoomTimeout = setTimeout(() => setPreviewPage(state.previewPage), 150);
       }
     }
 
@@ -591,8 +746,9 @@
       container.addEventListener('dragover', (e) => {
         e.preventDefault();
         
-        // 파일 드래그인지, 아이템 드래그인지 구분
-        if (e.dataTransfer.types && e.dataTransfer.types.includes('Files')) {
+        // 파일 드래그인지(텍스트, URL 포함), 아이템 드래그인지 구분
+        const types = e.dataTransfer.types;
+        if (types && (types.includes('Files') || types.includes('text/plain') || types.includes('text/uri-list'))) {
           e.dataTransfer.dropEffect = 'copy';
           if (state[workspaceId].length === 0) {
             container.classList.add('empty-workspace-active');
@@ -610,9 +766,8 @@
         e.preventDefault();
         container.classList.remove('empty-workspace-active');
 
-        // 파일 드롭 처리
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          handleFileUpload({ target: { files: e.dataTransfer.files } }, workspaceId);
+        // 파일/경로 드롭 처리 (우회 편의성 로직 통과 여부 확인)
+        if (handleAdvancedDrop(e, workspaceId)) {
           return;
         }
 
