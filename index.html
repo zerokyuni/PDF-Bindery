@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PDF 제본소 by KYUN</title>
+  <title>PDF Manipulation Studio</title>
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -670,21 +670,28 @@
       const itemId = el.dataset.id;
       const wsId = el.dataset.workspace;
 
-      // 드래그 시작 시 선택되지 않은 항목이면 해당 항목만 단일 선택으로 설정
+      // 단일 항목을 그냥 드래그할 때 화면 전체 리렌더링을 방지하여 드래그 끊김 문제 해결
       if (!state.selectedIds.has(itemId)) {
         state.selectedIds.clear();
         state.selectedIds.add(itemId);
-        renderWorkspace('A'); renderWorkspace('B');
+
+        document.querySelectorAll('.pdf-item').forEach(node => {
+          if (node.dataset.id === itemId) node.classList.add('selected-item');
+          else node.classList.remove('selected-item');
+        });
       }
 
       state.dragSourceWorkspace = wsId;
       state.draggedItems = state[wsId].filter(i => state.selectedIds.has(i.id));
 
       e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', itemId); 
+      // 외부 파일 드롭과 확실하게 구분하기 위해 커스텀 데이터 타입 사용
+      e.dataTransfer.setData('application/x-pdf-item', itemId); 
       
-      // 드래그 중인 모든 선택 항목 투명도 적용
-      document.querySelectorAll('.selected-item').forEach(node => node.classList.add('opacity-50'));
+      // 브라우저 렌더링 사이클 충돌을 막기 위해 setTimeout으로 투명도 적용
+      setTimeout(() => {
+        document.querySelectorAll('.selected-item').forEach(node => node.classList.add('opacity-50'));
+      }, 0);
     }
 
     function handleDragEnd(e) {
@@ -695,23 +702,30 @@
       state.dragSourceWorkspace = null;
     }
 
-    function handleDragOver(e) {
+    // [추가됨] 브라우저에 따라 dragenter에서 기본 이벤트를 막아줘야 drop이 정상 작동함
+    function handleDragEnter(e) {
       e.preventDefault();
+    }
+
+    function handleDragOver(e) {
+      e.preventDefault(); 
       e.dataTransfer.dropEffect = 'move';
       
       const el = e.currentTarget;
+
+      // 타겟이 아닌 다른 요소들의 인디케이터 선을 빠르게 지워줌
+      document.querySelectorAll('.pdf-item').forEach(item => {
+        if (item !== el) item.classList.remove('drop-target-top', 'drop-target-bottom');
+      });
+
       const rect = el.getBoundingClientRect();
       const isBottomHalf = e.clientY > rect.top + rect.height / 2;
 
-      // 이전 인디케이터 클래스 제거
-      document.querySelectorAll('.pdf-item').forEach(item => {
-        item.classList.remove('drop-target-top', 'drop-target-bottom');
-      });
-
-      // 위치에 따라 상단/하단 표시선 추가
       if (isBottomHalf) {
+        el.classList.remove('drop-target-top');
         el.classList.add('drop-target-bottom');
       } else {
+        el.classList.remove('drop-target-bottom');
         el.classList.add('drop-target-top');
       }
     }
@@ -722,7 +736,7 @@
 
     function handleDrop(e) {
       e.preventDefault();
-      e.stopPropagation(); // 컨테이너 드롭 이벤트 방지
+      e.stopPropagation(); // 중요: 부모 컨테이너(워크스페이스 빈 공간)의 드롭 이벤트와 겹치지 않게 방지
       
       const el = e.currentTarget;
       el.classList.remove('drop-target-top', 'drop-target-bottom');
@@ -739,22 +753,25 @@
       executeMove(targetWorkspace, targetIndex);
     }
 
-    // 워크스페이스 컨테이너 자체에 드롭 (비어있을 때 등)
+    // 워크스페이스 컨테이너 자체에 드롭 (비어있을 때나 맨 끝으로 보낼 때)
     function setupWorkspaceDropZone(containerId, workspaceId) {
       const container = document.getElementById(containerId);
+
+      container.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+      });
       
       container.addEventListener('dragover', (e) => {
         e.preventDefault();
         
-        // 파일 드래그인지(텍스트, URL 포함), 아이템 드래그인지 구분
-        const types = e.dataTransfer.types;
-        if (types && (types.includes('Files') || types.includes('text/plain') || types.includes('text/uri-list'))) {
+        // 아이템 이동인지, 파일/URL 업로드인지 명확하게 구분
+        if (e.dataTransfer.types && e.dataTransfer.types.includes('application/x-pdf-item')) {
+          e.dataTransfer.dropEffect = 'move';
+        } else {
           e.dataTransfer.dropEffect = 'copy';
           if (state[workspaceId].length === 0) {
             container.classList.add('empty-workspace-active');
           }
-        } else {
-          e.dataTransfer.dropEffect = 'move';
         }
       });
 
@@ -766,15 +783,17 @@
         e.preventDefault();
         container.classList.remove('empty-workspace-active');
 
-        // 파일/경로 드롭 처리 (우회 편의성 로직 통과 여부 확인)
+        // 파일/경로 드롭 처리
         if (handleAdvancedDrop(e, workspaceId)) {
           return;
         }
 
         // 아이템 이동 드롭 처리
         if (state.draggedItems.length === 0) return;
+        
         // 타겟 요소가 컨테이너 자체이거나 빈 영역일 경우 맨 끝으로 이동
-        if (e.target === container || container.children.length === 0 || e.target.closest('.h-full')) {
+        // 개별 pdf-item 위에서 발생한 드롭은 위쪽의 handleDrop에서 실행되도록 방어코드 작성
+        if (e.target === container || container.children.length === 0 || !e.target.closest('.pdf-item')) {
           executeMove(workspaceId, state[workspaceId].length);
         }
       });
@@ -787,7 +806,7 @@
       
       let finalInsertIndex = targetIndex;
 
-      // 같은 워크스페이스로 이동할 때 인덱스 꼬임 방지 보정
+      // 같은 워크스페이스 내에서 아래쪽으로 이동할 때 인덱스 밀림 현상 보정
       if (sourceWorkspace === targetWorkspace) {
         const removedBeforeTarget = itemsToMove.filter(item => {
           return state[sourceWorkspace].findIndex(i => i.id === item.id) < targetIndex;
@@ -798,8 +817,10 @@
       state[sourceWorkspace] = state[sourceWorkspace].filter(item => !itemsToMove.some(m => m.id === item.id));
       state[targetWorkspace].splice(finalInsertIndex, 0, ...itemsToMove);
 
+      // 이동 완료 후 드래그 상태 명시적 초기화
       state.draggedItems = [];
       state.dragSourceWorkspace = null;
+      
       renderWorkspace('A');
       renderWorkspace('B');
     }
